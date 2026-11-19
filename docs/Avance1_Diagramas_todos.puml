@@ -1,0 +1,577 @@
+@startuml
+title Arquitectura en capas del minikernel
+skinparam shadowing false
+skinparam componentStyle rectangle
+package "Cliente web (HTML5 + JavaScript)" {
+  [Paneles: Procesos, Memoria, Archivos, E/S, Seguridad] as UI
+  [Consola de logs y controles] as CON
+}
+package "API Spring Boot (STOMP / REST)" {
+  [Controladores REST y WebSocket] as API
+}
+package "Servidores en espacio de usuario" {
+  [ProcessServer] as PS
+  [MemoryServer] as MS
+  [FileServer] as FS
+  [IOServer] as IOS
+  [SecurityServer] as SS
+}
+package "Microkernel" {
+  [Scheduler] as SCH
+  [Kernel (IPC / IPCMessage)] as KER
+  [InterruptController] as IC
+}
+package "Hardware simulado" {
+  [CPU y reloj] as CPU
+  [RAM] as RAM
+  [Disco] as DSK
+  [DMA y NIC] as DMA
+}
+UI --> API
+CON --> API
+API --> KER : IPCMessage
+KER <--> PS : IPCMessage
+KER <--> MS : IPCMessage
+KER <--> FS : IPCMessage
+KER <--> IOS : IPCMessage
+KER <--> SS : IPCMessage
+KER --> SCH
+KER --> IC
+SCH --> CPU
+MS --> RAM
+IOS --> DSK
+IOS --> DMA
+DMA ..> IC : interrupción
+@enduml@startuml
+title Diagrama de casos de uso del simulador
+left to right direction
+skinparam shadowing false
+actor "Usuario" as U
+actor "Usuario Root" as R
+actor "Proceso simulado" as P
+actor "Kernel" as K
+actor "Servidor" as S
+R --|> U
+rectangle "Simulador web del minikernel" {
+  usecase "CU-01\nCrear aplicación y proceso" as CU01
+  usecase "CU-02\nPlanificar la CPU y conmutar contexto" as CU02
+  usecase "CU-03\nComunicar procesos mediante IPC" as CU03
+  usecase "CU-04\nVerificar estado seguro (Banquero)" as CU04
+  usecase "CU-05\nAsignar memoria" as CU05
+  usecase "CU-06\nLiberar memoria y analizar fragmentación" as CU06
+  usecase "CU-07\nGestionar archivos y directorios (CRUD)" as CU07
+  usecase "CU-08\nFormatear el sistema de archivos" as CU08
+  usecase "CU-09\nPlanificar el brazo de disco" as CU09
+  usecase "CU-10\nTransferir datos por DMA con interrupción" as CU10
+  usecase "CU-11\nEnviar y recibir paquetes (socket simulado)" as CU11
+  usecase "CU-12\nAutenticar usuario" as CU12
+  usecase "CU-13\nVerificar permisos (ACL)" as CU13
+  usecase "CU-14\nConsultar la auditoría de seguridad" as CU14
+}
+U --> CU01
+U --> CU02
+K --> CU02
+P --> CU03
+U --> CU04
+U --> CU05
+P --> CU05
+U --> CU06
+P --> CU06
+U --> CU07
+R --> CU08
+U --> CU09
+P --> CU10
+P --> CU11
+U --> CU12
+S --> CU13
+R --> CU14
+CU01 ..> CU05 : <<include>>
+CU01 ..> CU13 : <<include>>
+CU07 ..> CU13 : <<include>>
+CU08 ..> CU13 : <<include>>
+@enduml@startuml
+title CU-01 Crear aplicación y proceso
+skinparam shadowing false
+start
+:El usuario define la aplicación: nombre, ráfagas y prioridad;
+:La interfaz envía PROC_CREATE al ProcessServer;
+:El SecurityServer verifica el permiso de ejecución;
+if (¿Permiso de ejecución concedido?) then (sí)
+else (no)
+  :Registrar el intento y rechazar;
+  stop
+endif
+:El ProcessServer crea el PCB y pide memoria al MemoryServer;
+if (¿Memoria asignada?) then (sí)
+else (no)
+  :Pasar a Terminado e informar el error;
+  stop
+endif
+:El PCB pasa a Listo y entra en la cola de listos;
+stop
+@enduml@startuml
+title CU-02 Planificar la CPU y conmutar contexto
+skinparam shadowing false
+start
+:El usuario elige algoritmo (RR, prioridades o SRTF), quantum y overhead;
+:En cada tick el Scheduler revisa la cola de listos;
+if (¿Hay procesos listos?) then (sí)
+else (no)
+  :CPU ociosa durante el tick;
+  stop
+endif
+:El Scheduler decide si debe expropiar al proceso actual;
+if (¿Debe cambiar el proceso?) then (sí)
+else (no)
+  :Continuar con el proceso actual;
+  stop
+endif
+:Se guarda el PCB saliente y se restaura el entrante, consumiendo ticks de overhead;
+:La interfaz actualiza la CPU y las colas;
+stop
+@enduml@startuml
+title CU-03 Comunicar procesos mediante IPC
+skinparam shadowing false
+start
+:Un proceso ejecuta SEND, RECV, WAIT o SIGNAL;
+:El ProcessServer construye el IPCMessage y lo entrega al Kernel;
+:El Kernel enruta el mensaje al destinatario o al semáforo;
+if (¿Existe el destinatario?) then (sí)
+else (no)
+  :Descartar el mensaje y registrar el error;
+  stop
+endif
+:Se aplica la operación (entrega o wait/signal);
+if (¿El proceso debe bloquearse?) then (sí)
+else (no)
+  :Pasar a Bloqueado en la cola del semáforo o buzón;
+  stop
+endif
+:Se actualizan los PCB y la consola de logs;
+stop
+@enduml@startuml
+title CU-04 Verificar estado seguro (Banquero)
+skinparam shadowing false
+start
+:El usuario define Available, Max y Allocation;
+:El sistema calcula la matriz Need = Max − Allocation;
+:Un proceso hace una solicitud (Request);
+if (¿Request ≤ Need y ≤ Available?) then (sí)
+else (no)
+  :Rechazar o hacer esperar la solicitud;
+  stop
+endif
+:El BankerAlgorithm simula la asignación y prueba la seguridad;
+if (¿El estado resultante es seguro?) then (sí)
+else (no)
+  :Revertir la simulación y bloquear al proceso;
+  stop
+endif
+:La interfaz muestra las matrices y la secuencia segura;
+stop
+@enduml@startuml
+title CU-05 Asignar memoria
+skinparam shadowing false
+start
+:El usuario configura el esquema (estático o dinámico) y el algoritmo;
+:Un proceso solicita N KB con MEM_ALLOC al MemoryServer;
+if (¿Tamaño válido (> 0 y ≤ total)?) then (sí)
+else (no)
+  :Rechazar la solicitud;
+  stop
+endif
+:El MemoryManager busca partición o hueco según el algoritmo;
+if (¿Hay partición o hueco suficiente?) then (sí)
+else (no)
+  :Responder error; el proceso espera;
+  stop
+endif
+:Se asigna y se actualiza el mapa y los punteros del PCB;
+:El MemoryServer responde la confirmación por IPC;
+stop
+@enduml@startuml
+title CU-06 Liberar memoria y analizar fragmentación
+skinparam shadowing false
+start
+:Un proceso termina y se envía MEM_FREE al MemoryServer;
+if (¿El proceso posee memoria?) then (sí)
+else (no)
+  :Ignorar y registrar una advertencia;
+  stop
+endif
+:El MemoryManager libera la partición y fusiona huecos contiguos;
+:Se calcula la fragmentación interna y la externa;
+:Se redibuja el mapa con los indicadores;
+stop
+@enduml@startuml
+title CU-07 Gestionar archivos y directorios (CRUD)
+skinparam shadowing false
+start
+:El usuario elige la operación y la ruta;
+:El FileServer consulta permisos al SecurityServer;
+if (¿Permiso rwx concedido?) then (sí)
+else (no)
+  :Denegar y registrar en auditoría;
+  stop
+endif
+:El FileManager ejecuta la operación sobre el árbol y la tabla;
+if (¿Ruta válida y espacio suficiente?) then (sí)
+else (no)
+  :Informar el error sin modificar el FS;
+  stop
+endif
+:Se actualizan metadatos y bloques asignados;
+:La interfaz refresca el árbol y la tabla de asignación;
+stop
+@enduml@startuml
+title CU-08 Formatear el sistema de archivos
+skinparam shadowing false
+start
+:El usuario elige el tipo (FAT o inodos) y el tamaño de bloque;
+if (¿El usuario tiene rol Root?) then (sí)
+else (no)
+  :Denegar y registrar el intento de escalamiento;
+  stop
+endif
+:La interfaz pide confirmar, porque se borrarán los datos;
+if (¿Confirma el formateo?) then (sí)
+else (no)
+  :Cancelar sin cambios;
+  stop
+endif
+:El FileManager calcula los bloques y crea la tabla y la raíz;
+:La nueva estructura se guarda en la base de datos;
+stop
+@enduml@startuml
+title CU-09 Planificar el brazo de disco
+skinparam shadowing false
+start
+:El usuario fija cilindros, pistas, sectores y rpm y se guarda la configuración;
+:El usuario carga la cola de cilindros y la posición inicial;
+if (¿Cilindros dentro del rango?) then (sí)
+else (no)
+  :Rechazar las solicitudes inválidas;
+  stop
+endif
+:El usuario elige FCFS, SSTF, SCAN o C-SCAN;
+:El DeviceDriver calcula el orden y el movimiento del brazo;
+:La interfaz anima el brazo y muestra las métricas;
+stop
+@enduml@startuml
+title CU-10 Transferir datos por DMA con interrupción
+skinparam shadowing false
+start
+:El proceso pide una E/S de bloque y pasa a Bloqueado;
+:El IOServer programa el DMAController (dispositivo, dirección y cantidad);
+if (¿La región pertenece al proceso?) then (sí)
+else (no)
+  :Auditar la violación de memoria y abortar;
+  stop
+endif
+:El DMAController copia los datos sin usar la CPU;
+if (¿La transferencia falla?) then (sí)
+else (no)
+  :Levantar una interrupción de error;
+  stop
+endif
+:Al terminar levanta una interrupción;
+:El InterruptController despacha y el proceso pasa a Listo;
+stop
+@enduml@startuml
+title CU-11 Enviar y recibir paquetes (socket simulado)
+skinparam shadowing false
+start
+:El proceso emisor escribe datos en su socket;
+:El IOServer coloca el paquete en el buffer de salida;
+if (¿Hay espacio en el buffer de salida?) then (sí)
+else (no)
+  :Bloquear al emisor hasta que haya espacio;
+  stop
+endif
+:La interfaz de red lo entrega al buffer de entrada del destino;
+if (¿Existe el socket destino?) then (sí)
+else (no)
+  :Descartar el paquete y registrar;
+  stop
+endif
+:El proceso receptor lee y se actualizan los contadores;
+stop
+@enduml@startuml
+title CU-12 Autenticar usuario
+skinparam shadowing false
+start
+:El usuario ingresa credenciales o elige Invitado;
+:La interfaz envía SEC_LOGIN al SecurityServer;
+:El SecurityController compara con el hash guardado en la base de datos;
+if (¿Credenciales válidas?) then (sí)
+else (no)
+  :Registrar el intento fallido y mostrar el error;
+  stop
+endif
+:Se crea la sesión con su rol y se habilitan los paneles;
+:Se registra el inicio de sesión en la auditoría;
+stop
+@enduml@startuml
+title CU-13 Verificar permisos (ACL)
+skinparam shadowing false
+start
+:Un servidor recibe una solicitud (ejecutar, memoria o archivo);
+:Envía SEC_CHECK con usuario, recurso y operación;
+:El SecurityController busca la entrada en la ACL;
+if (¿La ACL permite la operación?) then (sí)
+else (no)
+  :Denegar y auditar acceso no autorizado;
+  stop
+endif
+:Devuelve permitir o denegar al servidor;
+:El servidor continúa o rechaza la operación;
+stop
+@enduml@startuml
+title CU-14 Consultar la auditoría de seguridad
+skinparam shadowing false
+start
+:El usuario abre la consola de auditoría;
+if (¿El usuario tiene rol Root?) then (sí)
+else (no)
+  :Denegar y registrar el intento;
+  stop
+endif
+:El SecurityServer recupera los eventos guardados;
+:El usuario aplica filtros (tipo, usuario, rango de ticks);
+:La interfaz muestra la tabla de eventos;
+stop
+@enduml@startuml
+title Diagrama de clases del minikernel
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam ranksep 40
+skinparam nodesep 25
+hide circle
+class Scheduler {
+  -algorithm: Algorithm
+  -quantum: int
+  -ctxSwitchTicks: int
+  -readyQueue: PCB[]
+  --
+  +selectNext(): PCB
+  +preempt()
+  +contextSwitch(a, b)
+}
+class InterruptController {
+  -vector: Map<int,Handler>
+  -pending: Queue<int>
+  --
+  +raise(irq: int)
+  +dispatch()
+}
+class Kernel {
+  -clock: int
+  -servers: Map<String,Server>
+  -running: boolean
+  --
+  +start()
+  +pause()
+  +tick()
+  +send(m: IPCMessage)
+  +route(m: IPCMessage)
+}
+abstract class Server {
+  #name: String
+  #inbox: Queue<IPCMessage>
+  --
+  +handle(m: IPCMessage)
+  +reply(m: IPCMessage)
+}
+class IPCMessage {
+  +id: int
+  +sender: String
+  +receiver: String
+  +type: String
+  +payload: Object
+  +tick: int
+  --
+}
+class ProcessServer {
+  -pcbTable: Map<int,PCB>
+  -nextPid: int
+  --
+  +createProcess(app)
+  +block(pid)
+  +wake(pid)
+  +terminate(pid)
+  +sendMessage(pid, dst, data)
+  +receiveMessage(pid)
+}
+class MemoryServer {
+  -manager: MemoryManager
+  --
+  +requestAlloc(pid, size)
+  +requestFree(pid)
+}
+class FileServer {
+  -manager: FileManager
+  --
+  +requestOp(op, path, data)
+}
+class IOServer {
+  -driver: DeviceDriver
+  -dma: DMAController
+  --
+  +requestIO(pid, dev, n)
+  +scheduleDisk(reqs[])
+  +sendPacket(sock, data)
+  +receivePacket(sock)
+}
+class SecurityServer {
+  -controller: SecurityController
+  -session: User
+  --
+  +login(user, pass)
+  +logout()
+  +checkAccess(user, res, op)
+  +getAuditLog(filter)
+}
+class PCB {
+  +pid: int
+  +state: State
+  +pc: int
+  +sp: int
+  +acc: int
+  +priority: int
+  +cpuTime: int
+  +burst: int
+  +memBase: int
+  +memLimit: int
+  --
+  +saveContext()
+  +restoreContext()
+}
+class MemoryManager {
+  -mode: STATIC|DYNAMIC
+  -algorithm: FIRST|BEST|WORST
+  -total: int
+  -partitions: Partition[]
+  --
+  +allocate(pid, size): bool
+  +free(pid)
+  +internalFragmentation()
+  +externalFragmentation()
+}
+class FileManager {
+  -fsType: FAT|INODE
+  -blockSize: int
+  -root: FileNode
+  -allocTable: int[]
+  --
+  +format(type, blockSize)
+  +create(path, type)
+  +read(path)
+  +write(path, data)
+  +rename(path, name)
+  +delete(path)
+}
+class DeviceDriver {
+  -type: DISK|NIC
+  -cylinders: int
+  -tracks: int
+  -sectors: int
+  -rpm: int
+  -armPos: int
+  -txBuffer: Packet[]
+  -rxBuffer: Packet[]
+  --
+  +scheduleArm(alg, reqs[])
+  +send(sock, data)
+  +receive(sock)
+}
+class SecurityController {
+  -users: User[]
+  -acl: Map<String,Perm>
+  -log: AuditEvent[]
+  --
+  +authenticate(u, p): User
+  +checkAccess(u, res, op): bool
+  +audit(e: AuditEvent)
+  +queryLog(filter)
+}
+class BankerAlgorithm {
+  -available: int[]
+  -max: int[][]
+  -allocation: int[][]
+  --
+  +need(): int[][]
+  +request(pid, req[]): bool
+  +isSafe(): bool
+}
+class Partition {
+  +start: int
+  +size: int
+  +pid: int
+  +requested: int
+  --
+  +isFree(): bool
+}
+class FileNode {
+  +name: String
+  +type: FILE|DIR
+  +size: int
+  +created: Date
+  +owner: String
+  +perms: String
+  +blocks: int[]
+  +children: FileNode[]
+  --
+}
+class DMAController {
+  -device: String
+  -memAddr: int
+  -count: int
+  -busy: boolean
+  --
+  +transfer(dev, addr, n)
+  +notifyDone()
+}
+class User {
+  +username: String
+  -passwordHash: String
+  +role: ROOT|STANDARD|GUEST
+  --
+}
+class Semaphore {
+  -value: int
+  -waiting: PCB[]
+  --
+  +wait(pid)
+  +signal()
+}
+class AuditEvent {
+  +tick: int
+  +user: String
+  +event: String
+  +resource: String
+  +result: String
+  --
+}
+Kernel *-- Scheduler
+Kernel *-- InterruptController
+Kernel o-- Server : servers
+Server -- IPCMessage : handle
+Server <|-- ProcessServer
+Server <|-- MemoryServer
+Server <|-- FileServer
+Server <|-- IOServer
+Server <|-- SecurityServer
+ProcessServer *-- PCB
+MemoryServer *-- MemoryManager
+FileServer *-- FileManager
+IOServer *-- DeviceDriver
+SecurityServer *-- SecurityController
+SecurityController *-- User
+SecurityController *-- AuditEvent
+MemoryManager *-- Partition
+FileManager *-- FileNode
+Scheduler ..> PCB : readyQueue
+ProcessServer ..> BankerAlgorithm
+ProcessServer ..> Semaphore
+IOServer ..> DMAController
+@enduml
